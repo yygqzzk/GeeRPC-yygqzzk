@@ -92,7 +92,6 @@ func (server *Server) serveCodec(cc codec.Codec) {
 	sending := new(sync.Mutex) // 互斥锁，用于保护 sending 变量
 	wg := new(sync.WaitGroup)  // 用于等待所有请求处理的 goroutine 完成
 
-	// 一个connection对应一个goroutine
 	for {
 		req, err := server.readRequest(cc)
 		if err != nil {

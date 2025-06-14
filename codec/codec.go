@@ -2,6 +2,7 @@ package codec
 
 import "io"
 
+// 定义NewCodecFunc 返回Codec的构造函数
 type NewCodecFunc func(io.ReadWriteCloser) Codec
 
 type Type string
