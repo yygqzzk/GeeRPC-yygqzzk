@@ -123,7 +123,7 @@ func (client *Client) receive() {
 			err = client.cc.ReadBody(nil)
 		case h.Error != "":
 			// 如果 call 存在，但服务端处理出错，即 h.Error 不为空。
-			call.Error = fmt.Errorf(h.Error)
+			call.Error = fmt.Errorf("rpc server: %s", h.Error)
 			call.done()
 		default:
 			// 如果 call 存在，服务端处理正常，那么需要从 body 中读取 Reply 的值。
