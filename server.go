@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -31,14 +32,17 @@ var DefaultServer = NewServer()
 
 // 定义 Option 结构体
 type Option struct {
-	MagicNumber uint64     // 用于识别不同的协议
-	CodecType   codec.Type // 客户端可以指定使用哪种 Codec 编码
+	MagicNumber    uint64        // 用于识别不同的协议
+	CodecType      codec.Type    // 客户端可以指定使用哪种 Codec 编码
+	ConnectTimeout time.Duration // 连接超时时间
+	HandleTimeout  time.Duration // 处理超时时间
 }
 
 // 默认的 Option
 var DefaultOption = &Option{
-	MagicNumber: MagicNumber,
-	CodecType:   CodecTypeGob,
+	MagicNumber:    MagicNumber,
+	CodecType:      CodecTypeGob,
+	ConnectTimeout: time.Second * 10,
 }
 
 // 请求体
@@ -117,11 +121,11 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 		return
 	}
 	coder := f(conn)
-	server.serveCodec(coder)
+	server.serveCodec(coder, opt.HandleTimeout)
 }
 
 // Codec 处理请求
-func (server *Server) serveCodec(cc codec.Codec) {
+func (server *Server) serveCodec(cc codec.Codec, timeout time.Duration) {
 	sending := new(sync.Mutex) // 互斥锁，用于保护 sending 变量
 	wg := new(sync.WaitGroup)  // 用于等待所有请求处理的 goroutine 完成
 
@@ -138,7 +142,7 @@ func (server *Server) serveCodec(cc codec.Codec) {
 		}
 		wg.Add(1)
 		// connection 中存在多个请求，每个请求由一个goroutine处理
-		go server.handleRequest(cc, req, sending, wg)
+		go server.handleRequest(cc, req, sending, wg, timeout)
 	}
 	// 若关闭连接前，还有未发送完数据，先等待处理完所有数据
 	wg.Wait()
@@ -197,16 +201,40 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 }
 
 // 处理请求
-func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup, timeout time.Duration) {
 	defer wg.Done()
-	// 调用方法
-	err := req.svc.call(req.mtype, req.argv, req.replyv)
-	if err != nil {
-		req.h.Error = err.Error()
-		server.sendResponse(cc, req.h, invalidRequest, sending)
+	// 创建两个通道，用于通知调用方和发送方
+	called := make(chan struct{})
+	sent := make(chan struct{})
+
+	go func() {
+		err := req.svc.call(req.mtype, req.argv, req.replyv)
+		called <- struct{}{}
+		if err != nil {
+			req.h.Error = err.Error()
+			server.sendResponse(cc, req.h, invalidRequest, sending)
+			sent <- struct{}{}
+			return
+		}
+		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+		sent <- struct{}{}
+	}()
+	// 若timeout为0，则一直阻塞等待
+	if timeout == 0 {
+		<-called
+		<-sent
 		return
 	}
-	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+
+	select {
+	case <-time.After(timeout):
+		req.h.Error = fmt.Sprintf("rpc server: request handle timeout: expect within %s", timeout)
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+	// 仅实现调用超时处理，不处理发送超时
+	case <-called:
+		<-sent
+	}
+
 }
 
 // 注册服务

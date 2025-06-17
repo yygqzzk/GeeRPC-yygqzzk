@@ -1,6 +1,7 @@
 package geeRPC
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 )
 
 type Call struct {
@@ -38,6 +40,52 @@ type Client struct {
 	pending  map[uint64]*Call // 未处理的请求, 存储未处理完的请求，键是编号，值是 Call 实例。
 	closing  bool             // 是否关闭, 客户端主动关闭
 	shutdown bool             // 是否停止, 服务器主动关闭, shutdown 置为 true 一般是有错误发生
+}
+
+// 客户端连接结果
+type clientResult struct {
+	client *Client
+	err    error
+}
+
+type newClientFunc func(conn net.Conn, opt *Option) (*Client, error)
+
+func dialTimeout(f newClientFunc, network, address string, opts ...*Option) (client *Client, err error) {
+	opt, err := parseOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialTimeout(network, address, opt.ConnectTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = conn.Close()
+		}
+	}()
+
+	// 创建一个通道，用于接收客户端连接结果
+	ch := make(chan clientResult)
+	go func() {
+		client, err := f(conn, opt)
+		ch <- clientResult{client, err}
+	}()
+	// 如果连接超时时间设置为0，则直接从通道中接收结果
+	if opt.ConnectTimeout == 0 {
+		// 阻塞等待结果
+		result := <-ch
+		return result.client, result.err
+	}
+
+	select {
+	// 如果超时，则返回错误信息
+	case <-time.After(opt.ConnectTimeout):
+		return nil, fmt.Errorf("rpc client: connect timeout: expect within %s", opt.ConnectTimeout)
+	// 如果连接成功，则返回客户端实例
+	case result := <-ch:
+		return result.client, result.err
+	}
 }
 
 // 自定义错误
@@ -184,24 +232,9 @@ func parseOptions(opts ...*Option) (*Option, error) {
 	return opt, nil
 }
 
-// 连接服务器
+// 带超时处理 连接服务器
 func Dial(network, address string, opts ...*Option) (client *Client, err error) {
-	opt, err := parseOptions(opts...)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := net.Dial(network, address)
-	if err != nil {
-		return nil, err
-	}
-
-	defer func() {
-		if client == nil {
-			conn.Close()
-		}
-	}()
-
-	return NewClient(conn, opt)
+	return dialTimeout(NewClient, network, address, opts...)
 }
 
 // 发送请求
@@ -227,6 +260,7 @@ func (client *Client) send(call *Call) {
 		if call != nil {
 			call.Error = err
 			call.done()
+
 		}
 	}
 
@@ -250,8 +284,17 @@ func (client *Client) Go(serviceMethod string, args interface{}, reply interface
 	return call
 }
 
-// 同步接口，等待 call 实例完成并返回错误信息。
-func (client *Client) Call(serviceMethod string, args interface{}, reply interface{}) error {
-	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-	return call.Error
+// 带超时处理的远程调用，包含发送报文、等待处理、接收报文
+func (client *Client) Call(ctx context.Context, serviceMethod string, args interface{}, reply interface{}) error {
+	call := client.Go(serviceMethod, args, reply, make(chan *Call, 1))
+
+	select {
+	// 如果请求超时，则删除 call 实例并返回错误信息
+	case <-ctx.Done():
+		client.removeCall(call.Seq)
+		return errors.New("rpc client: call failed: " + ctx.Err().Error())
+	case call := <-call.Done:
+		return call.Error
+	}
+
 }
