@@ -1,6 +1,7 @@
 package geeRPC
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -204,6 +207,36 @@ func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 	return newClientCodec(coder, opt), nil
 }
 
+// 创建http客户端
+func NewHTTPClient(conn net.Conn, opt *Option) (*Client, error) {
+	_, _ = io.WriteString(conn, fmt.Sprintf("CONNECT %s HTTP/1.0\n\n", defaultRPCPath))
+	// 读取响应
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
+	if err == nil && resp.Status == connected {
+		return NewClient(conn, opt)
+	}
+	if err == nil {
+		err = errors.New("unexpected HTTP response: " + resp.Status)
+	}
+	return nil, err
+}
+
+// 根据网络地址和选项选择不同的 Dial 方法
+func XDial(rpcAddr string, opts ...*Option) (*Client, error) {
+	parts := strings.Split(rpcAddr, "@")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("rpc address %s, expect protocol@addr", rpcAddr)
+	}
+	protocol, addr := parts[0], parts[1]
+	switch protocol {
+	case "http":
+		return DialHTTP("tcp", addr, opts...)
+	default:
+		// tcp, unix or other transport protocol
+		return Dial(protocol, addr, opts...)
+	}
+}
+
 // 创建goroutine 接收异步响应
 func newClientCodec(cc codec.Codec, opt *Option) *Client {
 	client := &Client{
@@ -235,6 +268,11 @@ func parseOptions(opts ...*Option) (*Option, error) {
 // 带超时处理 连接服务器
 func Dial(network, address string, opts ...*Option) (client *Client, err error) {
 	return dialTimeout(NewClient, network, address, opts...)
+}
+
+// 带超时处理 连接http服务器
+func DialHTTP(network, address string, opts ...*Option) (*Client, error) {
+	return dialTimeout(NewHTTPClient, network, address, opts...)
 }
 
 // 发送请求

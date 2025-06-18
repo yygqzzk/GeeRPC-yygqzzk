@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -20,6 +21,11 @@ const (
 	MagicNumber   = 0x3bef5c
 	CodecTypeGob  = "application/gob"
 	CodecTypeJson = "application/json"
+	// 连接信息
+	connected = "200 Connected to Gee RPC"
+	// debug预留地址
+	defaultRPCPath   = "/_geeRPC_"
+	defaultDebugPath = "/debug/geeRPC"
 )
 
 // RPC 服务端
@@ -342,6 +348,36 @@ func (s *service) registerMethods() {
 		}
 		log.Printf("rpc server: register %s.%s\n", s.name, method.Name)
 	}
+}
+
+// 处理http请求
+func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "CONNECT" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(w, "405 must CONNECT\n")
+		return
+	}
+	// 将http请求转换为tcp连接
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		log.Print("rpc hijacking ", req.RemoteAddr, ": ", err.Error())
+		return
+	}
+	_, _ = io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
+	server.ServeConn(conn)
+}
+
+// 注册http处理
+func (server *Server) HandleHTTP() {
+	http.Handle(defaultRPCPath, server)
+	http.Handle(defaultDebugPath, debugHTTP{server})
+	log.Println("rpc server debug path:", defaultDebugPath)
+}
+
+// 默认的 HandleHTTP 方法
+func HandleHTTP() {
+	DefaultServer.HandleHTTP()
 }
 
 // 判断类型是否是导出的或者内置的

@@ -5,6 +5,7 @@ import (
 	"geeRPC"
 	"log"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -18,26 +19,17 @@ func (f Foo) Sum(args Args, reply *int) error {
 	return nil
 }
 
-func startServer(addr chan string) {
+func startServer(addrCh chan string) {
 	var foo Foo
-	if err := geeRPC.Register(&foo); err != nil {
-		log.Fatal("register error:", err)
-	}
-	// 监听一个空闲的端口
-	l, err := net.Listen("tcp", ":0")
-	if err != nil {
-		log.Fatal("network error:", err)
-	}
-	log.Println("start rpc server on", l.Addr())
-	addr <- l.Addr().String()
-	geeRPC.Accept(l)
+	l, _ := net.Listen("tcp", ":9999")
+	_ = geeRPC.Register(&foo)
+	geeRPC.HandleHTTP()
+	addrCh <- l.Addr().String()
+	_ = http.Serve(l, nil)
 }
 
-func main() {
-	log.SetFlags(0)
-	addr := make(chan string)
-	go startServer(addr)
-	client, _ := geeRPC.Dial("tcp", <-addr)
+func call(addrCh chan string) {
+	client, _ := geeRPC.DialHTTP("tcp", <-addrCh)
 	defer func() { _ = client.Close() }()
 
 	time.Sleep(time.Second)
@@ -56,4 +48,11 @@ func main() {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func main() {
+	log.SetFlags(0)
+	ch := make(chan string)
+	go call(ch)
+	startServer(ch)
 }
