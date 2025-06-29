@@ -10,7 +10,7 @@ import (
 
 type XClient struct {
 	d       Discovery
-	mode    selectMode
+	mode    SelectMode
 	opt     *geeRPC.Option
 	mu      sync.Mutex
 	clients map[string]*geeRPC.Client
@@ -30,7 +30,7 @@ func (xc *XClient) Close() error {
 	return nil
 }
 
-func NewXClient(d Discovery, mode selectMode, opt *geeRPC.Option) *XClient {
+func NewXClient(d Discovery, mode SelectMode, opt *geeRPC.Option) *XClient {
 	return &XClient{
 		d:       d,
 		mode:    mode,

@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-type selectMode int
+type SelectMode int
 
 const (
-	RandomSelect selectMode = iota
+	RandomSelect SelectMode = iota
 	RoundRobinSelect
 )
 
@@ -19,7 +19,7 @@ const (
 type Discovery interface {
 	Refresh() error
 	Update(servers []string) error
-	Get(mode selectMode) (string, error)
+	Get(mode SelectMode) (string, error)
 	GetAll() ([]string, error)
 }
 
@@ -28,7 +28,7 @@ type MultiServersDiscovery struct {
 	r       *rand.Rand   // 生成随机数
 	mu      sync.RWMutex // 读写锁
 	servers []string
-	index   int // 记录轮旋算法时的轮询下标
+	index   int // 记录轮询算法时的轮询下标
 }
 
 func NewMultiServerDiscovery(servers []string) *MultiServersDiscovery {
@@ -56,7 +56,7 @@ func (d *MultiServersDiscovery) Update(servers []string) error {
 }
 
 // 根据负载均衡算法获取服务实例
-func (d *MultiServersDiscovery) Get(mode selectMode) (string, error) {
+func (d *MultiServersDiscovery) Get(mode SelectMode) (string, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
